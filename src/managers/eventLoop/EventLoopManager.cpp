@@ -27,6 +27,8 @@ CEventLoopManager::~CEventLoopManager() {
         wl_event_source_remove(m_sWayland.eventSource);
     if (m_sIdle.eventSource)
         wl_event_source_remove(m_sIdle.eventSource);
+    if (m_sTimers.timerfd >= 0)
+        close(m_sTimers.timerfd);
 }
 
 static int timerWrite(int fd, uint32_t mask, void* data) {
@@ -74,8 +76,8 @@ void CEventLoopManager::removeTimer(SP<CEventLoopTimer> timer) {
 }
 
 static void timespecAddNs(timespec* pTimespec, int64_t delta) {
-    int delta_ns_low = delta % TIMESPEC_NSEC_PER_SEC;
-    int delta_s_high = delta / TIMESPEC_NSEC_PER_SEC;
+    auto delta_ns_low = delta % TIMESPEC_NSEC_PER_SEC;
+    auto delta_s_high = delta / TIMESPEC_NSEC_PER_SEC;
 
     pTimespec->tv_sec += delta_s_high;
 

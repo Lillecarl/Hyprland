@@ -111,6 +111,11 @@ void CLayerSurface::onDestroy() {
     layerSurface.reset();
     if (surface)
         surface->unassign();
+
+    listeners.unmap.reset();
+    listeners.destroy.reset();
+    listeners.map.reset();
+    listeners.commit.reset();
 }
 
 void CLayerSurface::onMap() {
@@ -165,7 +170,7 @@ void CLayerSurface::onMap() {
     CBox geomFixed = {geometry.x + PMONITOR->vecPosition.x, geometry.y + PMONITOR->vecPosition.y, geometry.width, geometry.height};
     g_pHyprRenderer->damageBox(&geomFixed);
     const auto WORKSPACE  = PMONITOR->activeWorkspace;
-    const bool FULLSCREEN = WORKSPACE->m_bHasFullscreenWindow && WORKSPACE->m_efFullscreenMode == FULLSCREEN_FULL;
+    const bool FULLSCREEN = WORKSPACE->m_bHasFullscreenWindow && WORKSPACE->m_efFullscreenMode == FSMODE_FULLSCREEN;
 
     startAnimation(!(layer == ZWLR_LAYER_SHELL_V1_LAYER_TOP && FULLSCREEN && !GRABSFOCUS));
     readyToDelete = false;
@@ -242,7 +247,7 @@ void CLayerSurface::onCommit() {
 
     if (!mapped) {
         // we're re-mapping if this is the case
-        if (layerSurface->surface && !layerSurface->surface->current.buffer) {
+        if (layerSurface->surface && !layerSurface->surface->current.texture) {
             fadingOut = false;
             geometry  = {};
             g_pHyprRenderer->arrangeLayersForMonitor(monitorID);
@@ -427,8 +432,8 @@ void CLayerSurface::startAnimation(bool in, bool instant) {
             PMONITOR->vecPosition + Vector2D{PMONITOR->vecSize.x, PMONITOR->vecSize.y / 2},
         };
 
-        float closest = std::numeric_limits<float>::max();
-        int   leader  = force;
+        float  closest = std::numeric_limits<float>::max();
+        size_t leader  = force;
         if (leader == -1) {
             for (size_t i = 0; i < 4; ++i) {
                 float dist = MIDDLE.distance(edgePoints[i]);

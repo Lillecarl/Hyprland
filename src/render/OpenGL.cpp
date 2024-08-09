@@ -1247,14 +1247,14 @@ void CHyprOpenGLImpl::renderRectWithBlur(CBox* box, const CColor& col, int round
 
     glEnable(GL_STENCIL_TEST);
 
-    glStencilFunc(GL_ALWAYS, 1, -1);
+    glStencilFunc(GL_ALWAYS, 1, 0xFF);
     glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
 
     glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
     renderRect(box, CColor(0, 0, 0, 0), round);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 
-    glStencilFunc(GL_EQUAL, 1, -1);
+    glStencilFunc(GL_EQUAL, 1, 0xFF);
     glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
 
     scissor(box);
@@ -1269,7 +1269,7 @@ void CHyprOpenGLImpl::renderRectWithBlur(CBox* box, const CColor& col, int round
     glClearStencil(0);
     glClear(GL_STENCIL_BUFFER_BIT);
     glDisable(GL_STENCIL_TEST);
-    glStencilMask(-1);
+    glStencilMask(0xFF);
     glStencilFunc(GL_ALWAYS, 1, 0xFF);
     scissor((CBox*)nullptr);
 
@@ -1802,12 +1802,12 @@ CFramebuffer* CHyprOpenGLImpl::blurMainFramebufferWithDamage(float a, CRegion* o
     CRegion tempDamage{damage};
 
     // and draw
-    for (int i = 1; i <= *PBLURPASSES; ++i) {
+    for (auto i = 1; i <= *PBLURPASSES; ++i) {
         tempDamage = damage.copy().scale(1.f / (1 << i));
         drawPass(&m_RenderData.pCurrentMonData->m_shBLUR1, &tempDamage); // down
     }
 
-    for (int i = *PBLURPASSES - 1; i >= 0; --i) {
+    for (auto i = *PBLURPASSES - 1; i >= 0; --i) {
         tempDamage = damage.copy().scale(1.f / (1 << i));                // when upsampling we make the region twice as big
         drawPass(&m_RenderData.pCurrentMonData->m_shBLUR2, &tempDamage); // up
     }
@@ -2091,7 +2091,7 @@ void CHyprOpenGLImpl::renderTextureWithBlur(SP<CTexture> tex, CBox* pBox, float 
 
     glEnable(GL_STENCIL_TEST);
 
-    glStencilFunc(GL_ALWAYS, 1, -1);
+    glStencilFunc(GL_ALWAYS, 1, 0xFF);
     glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
 
     glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
@@ -2101,7 +2101,7 @@ void CHyprOpenGLImpl::renderTextureWithBlur(SP<CTexture> tex, CBox* pBox, float 
         renderTexture(tex, pBox, a, round, true, true); // discard opaque
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 
-    glStencilFunc(GL_EQUAL, 1, -1);
+    glStencilFunc(GL_EQUAL, 1, 0xFF);
     glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
 
     // stencil done. Render everything.
@@ -2124,7 +2124,7 @@ void CHyprOpenGLImpl::renderTextureWithBlur(SP<CTexture> tex, CBox* pBox, float 
     glDisable(GL_STENCIL_TEST);
     renderTextureInternalWithDamage(tex, pBox, a, &texDamage, round, false, false, true, true);
 
-    glStencilMask(-1);
+    glStencilMask(0xFF);
     glStencilFunc(GL_ALWAYS, 1, 0xFF);
     scissor((CBox*)nullptr);
 }
@@ -2669,10 +2669,12 @@ void CHyprOpenGLImpl::createBGTextureForMonitor(CMonitor* pMonitor) {
     PFB->alloc(pMonitor->vecPixelSize.x, pMonitor->vecPixelSize.y, pMonitor->output->state->state().drmFormat);
 
     if (!m_pBackgroundTexture) {
-        // TODO: use relative paths to the installation
-        // or configure the paths at build time
         std::string texPath = "";
-        texPath             = "/usr/share/hyprland/wall";
+#ifndef DATAROOTDIR
+        texPath = "/usr/share/hypr/wall";
+#else
+        texPath = std::format("{}{}", DATAROOTDIR, "/hypr/wall");
+#endif
 
         // get the adequate tex
         if (FORCEWALLPAPER == -1) {
@@ -2686,12 +2688,10 @@ void CHyprOpenGLImpl::createBGTextureForMonitor(CMonitor* pMonitor) {
         texPath += ".png";
 
         // check if wallpapers exist
-        if (!std::filesystem::exists(texPath)) {
-            // try local
-            texPath = texPath.substr(0, 5) + "local/" + texPath.substr(5);
-
-            if (!std::filesystem::exists(texPath))
-                return; // the texture will be empty, oh well. We'll clear with a solid color anyways.
+        std::error_code err;
+        if (!std::filesystem::exists(texPath, err)) {
+            Debug::log(ERR, "createBGTextureForMonitor: failed, file doesn't exist or access denied, ec: {}", err.message());
+            return; // the texture will be empty, oh well. We'll clear with a solid color anyways.
         }
 
         createBackgroundTexture(texPath);
@@ -2868,7 +2868,7 @@ SP<CEGLSync> CHyprOpenGLImpl::createEGLSync(int fenceFD) {
     std::vector<EGLint> attribs;
     int                 dupFd = -1;
     if (fenceFD > 0) {
-        int dupFd = fcntl(fenceFD, F_DUPFD_CLOEXEC, 0);
+        dupFd = fcntl(fenceFD, F_DUPFD_CLOEXEC, 0);
         if (dupFd < 0) {
             Debug::log(ERR, "createEGLSync: dup failed");
             return nullptr;
@@ -2887,8 +2887,18 @@ SP<CEGLSync> CHyprOpenGLImpl::createEGLSync(int fenceFD) {
         return nullptr;
     }
 
-    auto eglsync  = SP<CEGLSync>(new CEGLSync);
-    eglsync->sync = sync;
+    // we need to flush otherwise we might not get a valid fd
+    glFlush();
+
+    int fd = g_pHyprOpenGL->m_sProc.eglDupNativeFenceFDANDROID(g_pHyprOpenGL->m_pEglDisplay, sync);
+    if (fd == EGL_NO_NATIVE_FENCE_FD_ANDROID) {
+        Debug::log(ERR, "eglDupNativeFenceFDANDROID failed");
+        return nullptr;
+    }
+
+    auto eglsync   = SP<CEGLSync>(new CEGLSync);
+    eglsync->sync  = sync;
+    eglsync->m_iFd = fd;
     return eglsync;
 }
 
@@ -2981,19 +2991,13 @@ CEGLSync::~CEGLSync() {
 
     if (g_pHyprOpenGL->m_sProc.eglDestroySyncKHR(g_pHyprOpenGL->m_pEglDisplay, sync) != EGL_TRUE)
         Debug::log(ERR, "eglDestroySyncKHR failed");
+
+    if (m_iFd >= 0)
+        close(m_iFd);
 }
 
-int CEGLSync::dupFenceFD() {
-    if (sync == EGL_NO_SYNC_KHR)
-        return -1;
-
-    int fd = g_pHyprOpenGL->m_sProc.eglDupNativeFenceFDANDROID(g_pHyprOpenGL->m_pEglDisplay, sync);
-    if (fd == EGL_NO_NATIVE_FENCE_FD_ANDROID) {
-        Debug::log(ERR, "eglDupNativeFenceFDANDROID failed");
-        return -1;
-    }
-
-    return fd;
+int CEGLSync::fd() {
+    return m_iFd;
 }
 
 bool CEGLSync::wait() {
